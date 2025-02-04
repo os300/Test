@@ -1,0 +1,7 @@
+pip install mnemonic
+pip install bip32utils
+pip install eth-hash
+pip install eth-keys
+pip install numba
+
+pip install mnemonic bip32utils eth-hash eth-keys numba
