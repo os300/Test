@@ -114,10 +114,13 @@ def find_address_for_target(target_address):
 
             futures.append(executor.submit(process_combination, perm_combination, tested_combinations))
 
+            # Imprime o número de tentativas a cada combinação processada
+            print(f'Tentativas feitas até agora: {attempts}')
+        
         # Monitorar tentativas a cada 60 segundos
         while futures:
             time.sleep(60)  # Espera 60 segundos
-            print(f'Tentativas feitas até agora: {attempts}')  # Imprime a contagem total
+            print(f'Tentativas feitas no último minuto: {attempts}')  # Imprime a contagem total
             print(f'Permutações realizadas no último minuto: {permutations_per_minute}')  # Imprime a contagem de permutações por minuto
             permutations_per_minute = 0  # Reseta o contador de permutações
             # Remove completadas
@@ -133,4 +136,3 @@ if __name__ == "__main__":
     print('Gera uma chave privada para um endereço específico.')
     while True:
         find_address_for_target(target_address)
-        
