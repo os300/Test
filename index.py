@@ -4,8 +4,9 @@ from bip32utils import BIP32Key
 import itertools
 import time
 from eth_hash.auto import keccak
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from eth_keys import keys
+from multiprocessing import Manager
 
 # Inicializa o gerador de mnemônicos
 mnemo = Mnemonic("english")
@@ -15,7 +16,7 @@ target_address = "0x2468e3576D94009F0Bd23795161E55d122d07dB6".lower()
 
 # Lista de palavras conhecidas
 known_words = [
-    "hand", "couch", "avocado", "insect", "laugh", "table", "yellow",
+    "hand", "couch", "avocado", "insect", "laugh", "table", "eye",
     "cattle", "peanut", "plate", "phone", "switch"
 ]
 
@@ -23,15 +24,6 @@ known_words = [
 all_attempts_file = "all_attempts.txt"
 key_puzzle_file = "key_puzzle.txt"
 tested_combinations_file = "tested_combinations.txt"
-
-# Variável global para contagem de tentativas
-attempts = 0
-
-# Buffer para tentativas para reduzir operações de I/O
-attempts_buffer = []
-
-# Contador de permutações por minuto
-permutations_per_minute = 0
 
 def load_tested_combinations():
     if os.path.exists(tested_combinations_file):
@@ -60,40 +52,27 @@ def generate_address(mnemonic):
 
     return address
 
-def save_attempt(mnemonic, wallet, is_match):
-    # Adiciona tentativas ao buffer
-    global attempts_buffer
-    attempts_buffer.append(f"Mnemonic: {mnemonic}\nAddress: {wallet}\nMatch: {'Yes' if is_match else 'No'}\n\n")
-
-    # Escreve buffer em arquivo periodicamente
-    if len(attempts_buffer) >= 100:
-        with open(all_attempts_file, "a") as f:
-            f.writelines(attempts_buffer)
-        attempts_buffer = []
-
-    if is_match:
-        with open(key_puzzle_file, "a") as f:
-            f.write(f"Mnemonic: {mnemonic}\nAddress: {wallet}\nMatch: Yes\n\n")
-
-def process_combination(combination, tested_combinations):
-    global attempts
-    global permutations_per_minute
+def process_combination(combination, tested_combinations, attempts, attempts_lock):
     mnemonic = generate_mnemonic(combination)
     if mnemonic in tested_combinations:
-        return
+        return False
 
     wallet = generate_address(mnemonic)
     is_match = wallet.lower() == target_address.lower()
-    save_attempt(mnemonic, wallet, is_match)
-    save_tested_combination(mnemonic)
 
-    # Incrementa a contagem de tentativas
-    attempts += 1
-    permutations_per_minute += 1
+    # Atualiza o contador de tentativas
+    with attempts_lock:
+        attempts.value += 1
+
+    if is_match:
+        print(f"Endereço encontrado! Mnemonic: {mnemonic}")
+        return True
+
+    # Salva a combinação testada
+    save_tested_combination(mnemonic)
+    return False
 
 def find_address_for_target(target_address):
-    global attempts
-    global permutations_per_minute
     tested_combinations = load_tested_combinations()
     start_time = time.time()
 
@@ -101,35 +80,27 @@ def find_address_for_target(target_address):
     fixed_word = known_words[2]
     words_to_permute = known_words[:2] + known_words[3:]
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = []
-        for combination in itertools.permutations(words_to_permute):
-            perm_combination = list(combination[:2]) + [fixed_word] + list(combination[2:])
+    # Usar Manager para compartilhar o contador de tentativas entre processos
+    with Manager() as manager:
+        attempts = manager.Value('i', 0)  # Contador de tentativas
+        attempts_lock = manager.Lock()    # Lock para evitar condições de corrida
 
-            mnemonic = generate_mnemonic(perm_combination)
+        with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+            futures = []
+            for combination in itertools.permutations(words_to_permute):
+                perm_combination = list(combination[:2]) + [fixed_word] + list(combination[2:])
+                futures.append(executor.submit(process_combination, perm_combination, tested_combinations, attempts, attempts_lock))
 
-            # Verifica se a combinação já foi testada
-            if mnemonic in tested_combinations:
-                continue
+                # Monitorar tentativas a cada 100 combinações
+                if len(futures) % 100 == 0:
+                    elapsed_time = time.time() - start_time
+                    combinations_per_minute = (attempts.value / elapsed_time) * 60
+                    print(f"Combinações realizadas: {attempts.value} | Taxa: {combinations_per_minute:.2f} combinações/minuto")
 
-            futures.append(executor.submit(process_combination, perm_combination, tested_combinations))
-
-            # Imprime o número de tentativas a cada combinação processada
-            print(f'Tentativas feitas até agora: {attempts}')
-        
-        # Monitorar tentativas a cada 60 segundos
-        while futures:
-            time.sleep(60)  # Espera 60 segundos
-            print(f'Tentativas feitas no último minuto: {attempts}')  # Imprime a contagem total
-            print(f'Permutações realizadas no último minuto: {permutations_per_minute}')  # Imprime a contagem de permutações por minuto
-            permutations_per_minute = 0  # Reseta o contador de permutações
-            # Remove completadas
-            futures = [f for f in futures if not f.done()]
-
-    # Grava qualquer tentativa restante no buffer
-    if attempts_buffer:
-        with open(all_attempts_file, "a") as f:
-            f.writelines(attempts_buffer)
+            for future in as_completed(futures):
+                if future.result():
+                    print("Endereço encontrado!")
+                    return
 
 if __name__ == "__main__":
     print('bip39 private key combinador V1')
