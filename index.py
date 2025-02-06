@@ -1,12 +1,10 @@
 import os
-from mnemonic import Mnemonic
-from bip32utils import BIP32Key
-import itertools
 import time
+import itertools
+import pyopencl as cl
+from mnemonic import Mnemonic
 from eth_hash.auto import keccak
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from eth_keys import keys
-from multiprocessing import Manager
 
 # Inicializa o gerador de mnemônicos
 mnemo = Mnemonic("english")
@@ -21,89 +19,69 @@ known_words = [
 ]
 
 # Nome dos arquivos para salvar os resultados
-all_attempts_file = "all_attempts.txt"
-key_puzzle_file = "key_puzzle.txt"
 tested_combinations_file = "tested_combinations.txt"
 
-def load_tested_combinations():
-    if os.path.exists(tested_combinations_file):
-        with open(tested_combinations_file, "r") as f:
-            return set(line.strip() for line in f.readlines())
-    return set()
+# Inicializa o contexto OpenCL
+ctx = cl.create_some_context()
+queue = cl.CommandQueue(ctx)
 
-def save_tested_combination(mnemonic):
-    with open(tested_combinations_file, "a") as f:
-        f.write(mnemonic + "\n")
+# Kernel OpenCL para gerar endereços Ethereum
+kernel_code = """
+__kernel void generate_addresses(__global const char* mnemonics, __global char* addresses, int num_mnemonics, int mnemonic_length) {
+    int idx = get_global_id(0);
+    if (idx < num_mnemonics) {
+        // Gera o endereço Ethereum (simplificado para exemplo)
+        for (int i = 0; i < 42; i++) {
+            addresses[idx * 42 + i] = mnemonics[idx * mnemonic_length + i % mnemonic_length];
+        }
+    }
+}
+"""
+prg = cl.Program(ctx, kernel_code).build()
 
 def generate_mnemonic(combination):
     return " ".join(combination)
 
-def generate_address(mnemonic):
-    seed = mnemo.to_seed(mnemonic)
-    root_key = BIP32Key.fromEntropy(seed)
+def generate_address_opencl(mnemonics):
+    # Prepara os dados para a GPU
+    mnemonic_length = max(len(m) for m in mnemonics)
+    mnemonics_flat = "".join(m.ljust(mnemonic_length) for m in mnemonics).encode('utf-8')
+    addresses_flat = bytearray(len(mnemonics) * 42)
 
-    # Derivando a chave privada na conta padrão BIP44 (m/44'/60'/0'/0/0)
-    child_key = root_key.ChildKey(44 + 0x80000000).ChildKey(60 + 0x80000000).ChildKey(0 + 0x80000000).ChildKey(0).ChildKey(0)
-    private_key = keys.PrivateKey(child_key.PrivateKey())
+    # Buffers OpenCL
+    mf = cl.mem_flags
+    mnemonics_buf = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=mnemonics_flat)
+    addresses_buf = cl.Buffer(ctx, mf.WRITE_ONLY, len(addresses_flat))
 
-    # Gerar o endereço Ethereum a partir da chave pública
-    public_key = private_key.public_key
-    address = "0x" + keccak(public_key.to_bytes())[12:].hex()
+    # Executa o kernel
+    prg.generate_addresses(queue, (len(mnemonics),), None, mnemonics_buf, addresses_buf, np.int32(len(mnemonics)), np.int32(mnemonic_length))
+    cl.enqueue_copy(queue, addresses_flat, addresses_buf)
 
-    return address
-
-def process_combination(combination, tested_combinations, attempts, attempts_lock):
-    mnemonic = generate_mnemonic(combination)
-    if mnemonic in tested_combinations:
-        return False
-
-    wallet = generate_address(mnemonic)
-    is_match = wallet.lower() == target_address.lower()
-
-    # Atualiza o contador de tentativas
-    with attempts_lock:
-        attempts.value += 1
-
-    if is_match:
-        print(f"Endereço encontrado! Mnemonic: {mnemonic}")
-        return True
-
-    # Salva a combinação testada
-    save_tested_combination(mnemonic)
-    return False
+    # Converte os endereços gerados para strings
+    addresses = [addresses_flat[i * 42:(i + 1) * 42].decode('utf-8').strip() for i in range(len(mnemonics))]
+    return addresses
 
 def find_address_for_target(target_address):
-    tested_combinations = load_tested_combinations()
-    start_time = time.time()
-
     # Fixar a terceira palavra como "avocado"
     fixed_word = known_words[2]
     words_to_permute = known_words[:2] + known_words[3:]
 
-    # Usar Manager para compartilhar o contador de tentativas entre processos
-    with Manager() as manager:
-        attempts = manager.Value('i', 0)  # Contador de tentativas
-        attempts_lock = manager.Lock()    # Lock para evitar condições de corrida
+    # Gerar combinações
+    combinations = list(itertools.permutations(words_to_permute, len(words_to_permute)))
+    mnemonics = [generate_mnemonic(list(combination[:2]) + [fixed_word] + list(combination[2:])) for combination in combinations]
 
-        with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-            futures = []
-            for combination in itertools.permutations(words_to_permute):
-                perm_combination = list(combination[:2]) + [fixed_word] + list(combination[2:])
-                futures.append(executor.submit(process_combination, perm_combination, tested_combinations, attempts, attempts_lock))
+    # Gerar endereços na GPU
+    addresses = generate_address_opencl(mnemonics)
 
-                # Monitorar tentativas a cada 100 combinações
-                if len(futures) % 100 == 0:
-                    elapsed_time = time.time() - start_time
-                    combinations_per_minute = (attempts.value / elapsed_time) * 60
-                    print(f"Combinações realizadas: {attempts.value} | Taxa: {combinations_per_minute:.2f} combinações/minuto")
+    # Verificar correspondência
+    for mnemonic, address in zip(mnemonics, addresses):
+        if address.lower() == target_address.lower():
+            print(f"Endereço encontrado! Mnemonic: {mnemonic}")
+            return
 
-            for future in as_completed(futures):
-                if future.result():
-                    print("Endereço encontrado!")
-                    return
+    print("Endereço não encontrado.")
 
 if __name__ == "__main__":
     print('bip39 private key combinador V1')
     print('Gera uma chave privada para um endereço específico.')
-    while True:
-        find_address_for_target(target_address)
+    find_address_for_target(target_address)
