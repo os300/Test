@@ -107,45 +107,44 @@ def find_address_for_target(target_address):
         all_combinations = manager.dict() # Dicionário para armazenar todas as combinações
 
         with ProcessPoolExecutor(max_workers=cpu_count()) as executor:
-            futures = []
             combination_generator = generate_combinations()
 
-            # Processar combinações em lotes
-            for _ in range(50000):  # Limite de 50.000 combinações por execução
-                try:
-                    combination = next(combination_generator)
-                    futures.append(executor.submit(process_combination, combination, tested_combinations, attempts, attempts_lock, all_combinations))
-                except StopIteration:
-                    break
+            while True:  # Loop infinito
+                futures = []
+                # Processar combinações em lotes
+                for _ in range(10500):  # Limite de 10.500 combinações por execução
+                    try:
+                        combination = next(combination_generator)
+                        futures.append(executor.submit(process_combination, combination, tested_combinations, attempts, attempts_lock, all_combinations))
+                    except StopIteration:
+                        break  # Sai do loop interno se não houver mais combinações
 
-                # Monitorar tentativas a cada 100 combinações
-                if len(futures) % 100 == 0:
-                    elapsed_time = time.time() - start_time
-                    combinations_per_minute = (attempts.value / elapsed_time) * 60
-                    print(f"Combinações realizadas: {attempts.value} | Taxa: {combinations_per_minute:.2f} combinações/minuto")
+                    # Monitorar tentativas a cada 100 combinações
+                    if len(futures) % 100 == 0:
+                        elapsed_time = time.time() - start_time
+                        combinations_per_minute = (attempts.value / elapsed_time) * 60
+                        print(f"Combinações realizadas: {attempts.value} | Taxa: {combinations_per_minute:.2f} combinações/minuto")
 
-            found_mnemonic = None
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    found_mnemonic = result
-                    break  # Sai do loop assim que encontra o endereço
+                found_mnemonic = None
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        found_mnemonic = result
+                        break  # Sai do loop interno se o endereço for encontrado
 
-            # Salvar todas as combinações da seed phase
-            # Converte o dicionário multiprocessing.Manager.dict para um dicionário padrão
-            all_combinations_dict = dict(all_combinations)
-            with open(all_combinations_file, "w") as f:
-                json.dump(all_combinations_dict, f, indent=4)
+                # Salvar todas as combinações da seed phase
+                all_combinations_dict = dict(all_combinations)
+                with open(all_combinations_file, "w") as f:
+                    json.dump(all_combinations_dict, f, indent=4)
 
-            if found_mnemonic:
-                # Salvar vencedor
-                os.makedirs(vencedor_pasta, exist_ok=True)
-                with open(os.path.join(vencedor_pasta, "vencedor.txt"), "w") as f:
-                    f.write(f"Seed Phase: {found_mnemonic}\nEndereço Alvo: {target_address}")
-                return
+                if found_mnemonic:
+                    # Salvar vencedor
+                    os.makedirs(vencedor_pasta, exist_ok=True)
+                    with open(os.path.join(vencedor_pasta, "vencedor.txt"), "w") as f:
+                        f.write(f"Seed Phase: {found_mnemonic}\nEndereço Alvo: {target_address}")
+                    break  # Sai do loop externo se o endereço for encontrado
 
 if __name__ == "__main__":
-    print('bip39 KEY combinador V1')
-    print('Gera um ADDRESS específico.')
-    while True:
-        find_address_for_target(target_address)
+    print('bip39 private key combinador V1')
+    print('Gera uma chave privada para um endereço específico.')
+    find_address_for_target(target_address)  # Remove o loop while True
