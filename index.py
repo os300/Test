@@ -112,7 +112,7 @@ def find_address_for_target(target_address):
             while True:  # Loop infinito
                 futures = []
                 # Processar combinações em lotes
-                for _ in range(10500):  # Limite de 10.500 combinações por execução
+                for _ in range(105000):  # Limite de 105.000 combinações por execução
                     try:
                         combination = next(combination_generator)
                         futures.append(executor.submit(process_combination, combination, tested_combinations, attempts, attempts_lock, all_combinations))
