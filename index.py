@@ -145,7 +145,7 @@ def find_address_for_target(target_address):
                 return
 
 if __name__ == "__main__":
-    print('bip39 private key combinador V1')
-    print('Gera uma chave privada para um endereço específico.')
+    print('bip39 KEY combinador V1')
+    print('Gera um ADDRESS específico.')
     while True:
         find_address_for_target(target_address)
